@@ -7,10 +7,11 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException, ElementClickInterceptedException
-import json
 import os
 import logging
 from urllib.parse import quote
+
+from config_loader import load_config
 
 # Set up logging
 logging.basicConfig(
@@ -477,15 +478,14 @@ class BookSyncAutomation:
 
 if __name__ == "__main__":
     try:
-        # Load configuration
+        # Load configuration (config.json, overridden by gitignored config.local.json if present)
         config_path = 'config.json'
         if not os.path.exists(config_path):
             logging.error(f"Config file not found at {config_path}")
             raise FileNotFoundError(f"Config file not found at {config_path}")
-            
-        with open(config_path) as f:
-            config = json.load(f)
-        
+
+        config = load_config(config_path)
+
         required_keys = ['goodreads_user_id', 'storygraph_email', 'storygraph_password']
         missing_keys = [key for key in required_keys if key not in config]
         if missing_keys:

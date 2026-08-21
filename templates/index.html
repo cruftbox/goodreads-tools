@@ -16,10 +16,15 @@
         <span class="action-title">Sync to StoryGraph</span>
         <span class="action-sub">Push recent ratings to StoryGraph (opens Chrome).</span>
       </button>
-      <button id="stats-btn" class="action">
+      <div class="action-card">
         <span class="action-title">Generate Year in Books</span>
-        <span class="action-sub">Renders an editorial HTML/PDF/PNG report of the last 12 months.</span>
-      </button>
+        <span class="action-sub">Renders an editorial HTML/PDF/PNG report. Defaults to the last 12 months — adjust the dates to change the range.</span>
+        <div class="date-range">
+          <label>Start<input type="date" id="start-date"></label>
+          <label>End<input type="date" id="end-date"></label>
+        </div>
+        <button id="stats-btn" class="action-btn">Generate</button>
+      </div>
     </section>
 
     <section id="status-section" class="status hidden">
@@ -46,6 +51,23 @@
     const statsResult = document.getElementById("stats-result");
     const downloads = document.getElementById("downloads");
     const previews = document.getElementById("previews");
+    const startDateInput = document.getElementById("start-date");
+    const endDateInput = document.getElementById("end-date");
+
+    function toDateInputValue(date) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      return `${y}-${m}-${d}`;
+    }
+
+    (function setDefaultDateRange() {
+      const today = new Date();
+      const oneYearAgo = new Date(today);
+      oneYearAgo.setFullYear(today.getFullYear() - 1);
+      startDateInput.value = toDateInputValue(oneYearAgo);
+      endDateInput.value = toDateInputValue(today);
+    })();
 
     function show(el)  { el.classList.remove("hidden"); }
     function hide(el)  { el.classList.add("hidden"); }
@@ -63,8 +85,13 @@
       hide(previews); previews.innerHTML = "";
     }
 
-    async function postJSON(url) {
-      const r = await fetch(url, { method: "POST", headers: { "Accept": "application/json" }});
+    async function postJSON(url, body) {
+      const opts = { method: "POST", headers: { "Accept": "application/json" } };
+      if (body !== undefined) {
+        opts.headers["Content-Type"] = "application/json";
+        opts.body = JSON.stringify(body);
+      }
+      const r = await fetch(url, opts);
       const data = await r.json().catch(() => ({}));
       return { ok: r.ok, status: r.status, data };
     }
@@ -126,6 +153,19 @@
     // --- stats ---
 
     statsBtn.addEventListener("click", async () => {
+      const startDate = startDateInput.value;
+      const endDate = endDateInput.value;
+
+      if (!!startDate !== !!endDate) {
+        reveal();
+        resetStatusUI();
+        statusTitle.textContent = "Year in Books";
+        setPill("Failed", "failed");
+        statsResult.textContent = "Set both a start and end date, or leave both blank.";
+        show(statsResult);
+        return;
+      }
+
       reveal();
       resetStatusUI();
       statusTitle.textContent = "Year in Books";
@@ -134,7 +174,8 @@
       syncBtn.disabled = true;
       statsBtn.disabled = true;
 
-      const res = await postJSON("/generate-stats");
+      const body = (startDate && endDate) ? { start_date: startDate, end_date: endDate } : undefined;
+      const res = await postJSON("/generate-stats", body);
       syncBtn.disabled = false;
       statsBtn.disabled = false;
 
@@ -154,7 +195,7 @@
       statsResult.innerHTML = `
         <strong>${d.total_books.toLocaleString()}</strong> books,
         <strong>${d.total_pages.toLocaleString()}</strong> pages
-        in the last 12 months${missing}.
+        from <strong>${d.window_start}</strong> to <strong>${d.window_end}</strong>${missing}.
       `;
       show(statsResult);
 

@@ -22,6 +22,6 @@ output/
 !docs/*.png
 
 # Local credentials override (config.json is checked in with placeholders;
-# if you want to actually exclude real credentials, rename the committed
-# file to config.example.json and run `git rm --cached config.json`)
+# real credentials go in config.local.json, which config_loader.py merges
+# on top of config.json at load time)
 config.local.json

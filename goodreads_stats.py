@@ -22,6 +22,8 @@ from typing import Optional
 import requests
 from bs4 import BeautifulSoup
 
+from config_loader import load_config
+
 
 # -------- constants --------
 
@@ -256,10 +258,21 @@ def aggregate_last_12_months(
     if today is None:
         today = datetime.now().astimezone()
     window_start = today - timedelta(days=365)
+    return aggregate_range(books, window_start, today, first_name=first_name)
 
-    in_window = [b for b in books if window_start <= b.user_read_at <= today]
 
-    months = _month_buckets_ending_at(today, 12)
+def aggregate_range(
+    books: list,
+    window_start: datetime,
+    window_end: datetime,
+    first_name: Optional[str] = None,
+) -> Stats:
+    """Like aggregate_last_12_months, but for an arbitrary [window_start,
+    window_end] range instead of always the trailing 365 days. Both bounds
+    are inclusive."""
+    in_window = [b for b in books if window_start <= b.user_read_at <= window_end]
+
+    months = _month_buckets_range(window_start, window_end)
     bpm = {label: 0 for label in months}
     ppm = {label: 0 for label in months}
 
@@ -283,9 +296,9 @@ def aggregate_last_12_months(
     )
 
     return Stats(
-        today=today,
+        today=window_end,
         window_start=window_start,
-        window_end=today,
+        window_end=window_end,
         total_books=len(in_window),
         total_pages=total_pages,
         books_missing_pages=books_missing_pages,
@@ -297,17 +310,19 @@ def aggregate_last_12_months(
     )
 
 
-def _month_buckets_ending_at(today: datetime, n: int) -> list:
+def _month_buckets_range(start: datetime, end: datetime) -> list:
+    """Month labels ('%b %Y') from start's month through end's month,
+    inclusive, oldest first."""
     labels = []
-    year, month = today.year, today.month
-    for _ in range(n):
+    year, month = start.year, start.month
+    while (year, month) <= (end.year, end.month):
         labels.append(datetime(year, month, 1).strftime("%b %Y"))
-        if month == 1:
-            month = 12
-            year -= 1
+        if month == 12:
+            month = 1
+            year += 1
         else:
-            month -= 1
-    return list(reversed(labels))
+            month += 1
+    return labels
 
 
 # -------- genres --------
@@ -772,13 +787,35 @@ def render_html_report(stats: Stats, genre_data, output_path: Path) -> Path:
 
 # -------- end-to-end --------
 
-def generate(user_id: str, output_dir: Path, today: Optional[datetime] = None) -> dict:
+def generate(
+    user_id: str,
+    output_dir: Path,
+    today: Optional[datetime] = None,
+    window_start: Optional[datetime] = None,
+    window_end: Optional[datetime] = None,
+) -> dict:
+    """Generate the report. By default (no window_start/window_end) this is
+    the rolling last-12-months view and always writes the fixed
+    `year_in_books.*` filenames, overwriting any previous run — that's the
+    "current report" entry point used by the CLI and the main web UI button.
+
+    Passing an explicit window_start/window_end instead renders that custom
+    date range and writes filenames suffixed with the range (e.g.
+    `year_in_books_20260101-20260821.pdf`) so different custom ranges don't
+    clobber each other on disk.
+    """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     cache_path = output_dir / "genres_cache.json"
 
     books, first_name = fetch_read_shelf(user_id)
-    stats = aggregate_last_12_months(books, today=today, first_name=first_name)
+
+    if window_start is not None and window_end is not None:
+        stats = aggregate_range(books, window_start, window_end, first_name=first_name)
+        basename = f"year_in_books_{window_start:%Y%m%d}-{window_end:%Y%m%d}"
+    else:
+        stats = aggregate_last_12_months(books, today=today, first_name=first_name)
+        basename = "year_in_books"
 
     if stats.total_books == 0:
         genre_data = ([], 0)
@@ -788,11 +825,11 @@ def generate(user_id: str, output_dir: Path, today: Optional[datetime] = None) -
 
     # HTML is the single source of truth for design. PDF and PNGs are
     # rendered FROM the HTML via headless Chromium (Playwright).
-    html_path = output_dir / "year_in_books.html"
+    html_path = output_dir / f"{basename}.html"
     render_html_report(stats, genre_data, html_path)
     paths = {"html": html_path}
     try:
-        paths.update(render_html_outputs(html_path, output_dir))
+        paths.update(render_html_outputs(html_path, output_dir, basename=basename))
     except Exception as e:
         logging.exception("Playwright render failed: %s", e)
 
@@ -800,11 +837,13 @@ def generate(user_id: str, output_dir: Path, today: Optional[datetime] = None) -
         "total_books": stats.total_books,
         "total_pages": stats.total_pages,
         "books_missing_pages": stats.books_missing_pages,
+        "window_start": stats.window_start.strftime("%Y-%m-%d"),
+        "window_end": stats.window_end.strftime("%Y-%m-%d"),
         "outputs": {name: str(p) for name, p in paths.items()},
     }
 
 
-def render_html_outputs(html_path: Path, output_dir: Path) -> dict:
+def render_html_outputs(html_path: Path, output_dir: Path, basename: str = "year_in_books") -> dict:
     """Render the HTML report to PDF, web PNG, and 9:16 social card PNG
     via headless Chromium (Playwright). Single browser launch shared
     across the renders for speed. Returns a dict of {format: path} with
@@ -821,7 +860,7 @@ def render_html_outputs(html_path: Path, output_dir: Path) -> dict:
             # ---- PDF (Letter portrait) ----
             page = browser.new_page()
             page.goto(html_url, wait_until="networkidle")
-            pdf_path = output_dir / "year_in_books.pdf"
+            pdf_path = output_dir / f"{basename}.pdf"
             page.pdf(
                 path=str(pdf_path),
                 format="Letter",
@@ -840,7 +879,7 @@ def render_html_outputs(html_path: Path, output_dir: Path) -> dict:
                                       device_scale_factor=2)
             page = ctx.new_page()
             page.goto(html_url, wait_until="networkidle")
-            web_path = output_dir / "year_in_books_web.png"
+            web_path = output_dir / f"{basename}_web.png"
             page.screenshot(path=str(web_path), full_page=True)
             out["web"] = web_path
             ctx.close()
@@ -860,7 +899,7 @@ def render_html_outputs(html_path: Path, output_dir: Path) -> dict:
             page = ctx.new_page()
             page.goto(html_url, wait_until="networkidle")
             page.evaluate("document.body.classList.add('card-mode')")
-            social_path = output_dir / "year_in_books_social.png"
+            social_path = output_dir / f"{basename}_social.png"
             page.screenshot(
                 path=str(social_path),
                 clip={"x": 0, "y": 0, "width": 540, "height": 960},
@@ -880,22 +919,49 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--user-id", help="Goodreads user ID (else read from config.json).")
     parser.add_argument("--output-dir", default="output", help="Output directory (default: output).")
     parser.add_argument("--config", default="config.json", help="Path to config.json.")
+    parser.add_argument(
+        "--start-date", metavar="YYYY-MM-DD",
+        help="Custom range start (inclusive). Requires --end-date. "
+             "Default: rolling last 12 months ending today.",
+    )
+    parser.add_argument(
+        "--end-date", metavar="YYYY-MM-DD",
+        help="Custom range end (inclusive). Requires --start-date.",
+    )
     args = parser.parse_args(argv)
+
+    if bool(args.start_date) != bool(args.end_date):
+        print("--start-date and --end-date must be given together", file=sys.stderr)
+        return 2
+
+    window_start = window_end = None
+    if args.start_date and args.end_date:
+        try:
+            window_start = datetime.strptime(args.start_date, "%Y-%m-%d").astimezone()
+            window_end = datetime.strptime(args.end_date, "%Y-%m-%d").astimezone().replace(
+                hour=23, minute=59, second=59
+            )
+        except ValueError as e:
+            print(f"invalid date: {e}", file=sys.stderr)
+            return 2
+        if window_start > window_end:
+            print("--start-date must not be after --end-date", file=sys.stderr)
+            return 2
 
     user_id = args.user_id
     if not user_id:
         config_path = Path(args.config)
-        if not config_path.exists():
+        config = load_config(config_path)
+        if not config:
             print(f"config not found at {config_path} and no --user-id supplied", file=sys.stderr)
             return 2
-        config = json.loads(config_path.read_text(encoding="utf-8"))
         user_id = config.get("goodreads_user_id")
         if not user_id:
-            print("goodreads_user_id missing from config.json", file=sys.stderr)
+            print("goodreads_user_id missing from config.json / config.local.json", file=sys.stderr)
             return 2
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    result = generate(user_id, Path(args.output_dir))
+    result = generate(user_id, Path(args.output_dir), window_start=window_start, window_end=window_end)
     print(json.dumps(result, indent=2))
     return 0
 

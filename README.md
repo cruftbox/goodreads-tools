@@ -85,7 +85,9 @@ The last step downloads a headless Chromium build (~150 MB) that the Year in Boo
 
 ## Configure
 
-Edit `config.json`:
+Real credentials go in `config.local.json`, not `config.json`. `config.json` is tracked in git and should keep its placeholder values; `config.local.json` is gitignored and overrides `config.json` key-by-key when present, so your real values never end up in git history.
+
+Create `config.local.json` next to `config.json`:
 
 ```json
 {
@@ -96,7 +98,7 @@ Edit `config.json`:
 ```
 
 - **`goodreads_user_id`** — required for both features. Go to your Goodreads profile; the URL looks like `https://www.goodreads.com/user/show/12345678-username`. The leading number is your user ID.
-- **`storygraph_email`** / **`storygraph_password`** — only needed for the sync feature. If you only care about the Year in Books report, leave these as placeholders.
+- **`storygraph_email`** / **`storygraph_password`** — only needed for the sync feature. If you only care about the Year in Books report, leave these out.
 
 ## Run
 
@@ -113,10 +115,10 @@ You can also run either feature directly from the command line — see the per-f
 ## Troubleshooting
 
 - **Year in Books fails with a Playwright / browser error.** You probably skipped `python -m playwright install chromium` during install. Run it.
-- **Sync fails to log in.** Re-check `storygraph_email` / `storygraph_password` in `config.json`. Check `sync_log.txt` for the actual error. The sync script also drops screenshots (e.g. `login_error.png`, `book_error_*.png`) into the project directory when something goes wrong — those are usually the fastest path to diagnosis.
+- **Sync fails to log in.** Re-check `storygraph_email` / `storygraph_password` in `config.local.json`. Check `sync_log.txt` for the actual error. The sync script also drops screenshots (e.g. `login_error.png`, `book_error_*.png`) into the project directory when something goes wrong — those are usually the fastest path to diagnosis.
 - **Sync sees zero books to add.** Confirm `goodreads_user_id` is correct, and that the books you expect are actually *rated* on Goodreads (not just finished).
 - **Anything else.** Paste the error into an LLM coding assistant. Most install/runtime issues are environment-specific and fall well within what these assistants can debug.
 
 ## Safety note
 
-`config.json` stores your StoryGraph password in plain text. Keep the file private and don't commit it to a public repo. The included `.gitignore` already excludes generated output.
+`config.local.json` stores your StoryGraph password in plain text. It's already gitignored, so it won't be committed — keep it private regardless (e.g. don't attach it when sharing your project folder). The included `.gitignore` also excludes generated output.

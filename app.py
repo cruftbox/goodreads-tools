@@ -10,7 +10,6 @@ Binds to 127.0.0.1 only. No auth.
 
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
 import sys
@@ -23,6 +22,7 @@ from pathlib import Path
 from flask import Flask, jsonify, render_template, request, send_from_directory
 
 import goodreads_stats
+from config_loader import load_config
 
 
 ROOT = Path(__file__).resolve().parent
@@ -39,10 +39,8 @@ _runs_lock = threading.Lock()
 # -------- helpers --------
 
 def _read_config() -> dict:
-    if not CONFIG_PATH.exists():
-        return {}
     try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        return load_config(CONFIG_PATH)
     except Exception:
         return {}
 
@@ -162,8 +160,29 @@ def generate_stats():
             "error": "goodreads_user_id missing or unset in config.json",
         }), 400
 
+    body = request.get_json(silent=True) or {}
+    start_date_str = (body.get("start_date") or "").strip()
+    end_date_str = (body.get("end_date") or "").strip()
+
+    if bool(start_date_str) != bool(end_date_str):
+        return jsonify({"error": "start_date and end_date must be given together"}), 400
+
+    window_start = window_end = None
+    if start_date_str and end_date_str:
+        try:
+            window_start = datetime.strptime(start_date_str, "%Y-%m-%d").astimezone()
+            window_end = datetime.strptime(end_date_str, "%Y-%m-%d").astimezone().replace(
+                hour=23, minute=59, second=59
+            )
+        except ValueError:
+            return jsonify({"error": "dates must be in YYYY-MM-DD format"}), 400
+        if window_start > window_end:
+            return jsonify({"error": "start_date must not be after end_date"}), 400
+
     try:
-        result = goodreads_stats.generate(user_id, OUTPUT_DIR)
+        result = goodreads_stats.generate(
+            user_id, OUTPUT_DIR, window_start=window_start, window_end=window_end
+        )
     except Exception as e:
         logging.exception("Stats generation failed")
         return jsonify({"error": f"stats generation failed: {e}"}), 502
@@ -177,6 +196,8 @@ def generate_stats():
         "total_books": result["total_books"],
         "total_pages": result["total_pages"],
         "books_missing_pages": result["books_missing_pages"],
+        "window_start": result["window_start"],
+        "window_end": result["window_end"],
         "downloads": download_urls,
     })
 
