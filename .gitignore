@@ -25,3 +25,8 @@ output/
 # real credentials go in config.local.json, which config_loader.py merges
 # on top of config.json at load time)
 config.local.json
+
+# BookHive read-date fix: personal library export and run outputs
+goodreads_library_export*.csv
+fix_read_dates_report.csv
+fix_read_dates_backup_*.json
